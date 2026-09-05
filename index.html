@@ -522,6 +522,39 @@ function testLoadDB(){
   localStorage.setItem(TEST_DB_KEY,JSON.stringify(db));return db;
 }
 function testSaveDB(db){localStorage.setItem(TEST_DB_KEY,JSON.stringify(db))}
+function testRebuildIngredientInventory(db){
+  // Recalcula o saldo a partir das movimentações para evitar divergência entre
+  // entradas, vendas e produção. Isso também corrige lançamentos de produção
+  // feitos em versões de teste anteriores.
+  const invMap={};
+  const ensure=(id)=>invMap[id]||(invMap[id]={ingredient_id:id,quantity_kg:0,avg_unit_cost:0});
+  const entries=[...(db.ingredient_stock_entries||[])].sort((a,b)=>String(a.occurred_at||a.created_at||'').localeCompare(String(b.occurred_at||b.created_at||'')));
+  for(const e of entries){
+    const inv=ensure(e.ingredient_id), oldQ=Number(inv.quantity_kg||0), addQ=Number(e.quantity_kg||0), price=Number(e.unit_price||0);
+    if(oldQ+addQ>0)inv.avg_unit_cost=((oldQ*Number(inv.avg_unit_cost||0))+(addQ*price))/(oldQ+addQ);
+    else if(addQ>0)inv.avg_unit_cost=price;
+    inv.quantity_kg=oldQ+addQ;
+  }
+  for(const e of (db.ingredient_sales||[])){
+    ensure(e.ingredient_id).quantity_kg-=Number(e.quantity_kg||0);
+  }
+  const formulas=db.production_formulas||[], items=db.production_formula_items||[];
+  const chooseFormula=(rec)=>{
+    const list=formulas.filter(f=>f.product_id===rec.product_id).sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
+    if(!list.length)return null;
+    const t=String(rec.created_at||rec.occurred_at||'');
+    const prior=list.filter(f=>String(f.created_at||'')<=t);
+    return prior[prior.length-1]||list.find(f=>f.active)||list[list.length-1];
+  };
+  for(const rec of (db.production_records||[])){
+    const f=chooseFormula(rec); if(!f)continue;
+    for(const it of items.filter(x=>x.formula_id===f.id)){
+      ensure(it.ingredient_id).quantity_kg-=Number(rec.quantity_kg||0)*Number(it.percentage||0)/100;
+    }
+  }
+  db.ingredient_inventory=Object.values(invMap);
+  return db;
+}
 function testId(){return crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(16).slice(2)}`}
 function testEnrich(table,rows,db){
   const one=(r)=>{r={...r};
@@ -551,7 +584,7 @@ async function testRpc(name,p){const db=testLoadDB(),now=new Date().toISOString(
   if(name==='add_ingredient_stock'){const e={id:p.p_entry_id,ingredient_id:p.p_ingredient_id,occurred_at:p.p_occurred_at,quantity_kg:Number(p.p_quantity_kg),unit_price:Number(p.p_unit_price),supplier:p.p_supplier,notes:p.p_notes,recorded_by:owner,created_at:now};db.ingredient_stock_entries.push(e);let inv=db.ingredient_inventory.find(x=>x.ingredient_id===e.ingredient_id);if(!inv){inv={ingredient_id:e.ingredient_id,quantity_kg:0,avg_unit_cost:0};db.ingredient_inventory.push(inv)}const oldQ=Number(inv.quantity_kg||0),addQ=e.quantity_kg;inv.avg_unit_cost=(oldQ+addQ)>0?((oldQ*Number(inv.avg_unit_cost||0))+(addQ*e.unit_price))/(oldQ+addQ):e.unit_price;inv.quantity_kg=oldQ+addQ;testSaveDB(db);return {data:inv,error:null}}
   if(name==='register_ingredient_sale'){const e={id:p.p_sale_id,ingredient_id:p.p_ingredient_id,occurred_at:p.p_occurred_at,quantity_kg:Number(p.p_quantity_kg),unit_price:Number(p.p_unit_price),buyer:p.p_buyer,notes:p.p_notes,recorded_by:owner,created_at:now};db.ingredient_sales.push(e);let inv=db.ingredient_inventory.find(x=>x.ingredient_id===e.ingredient_id);if(!inv){inv={ingredient_id:e.ingredient_id,quantity_kg:0,avg_unit_cost:0};db.ingredient_inventory.push(inv)}inv.quantity_kg=Number(inv.quantity_kg||0)-e.quantity_kg;testSaveDB(db);return {data:{quantity_kg:inv.quantity_kg},error:null}}
   if(name==='save_production_formula'){db.production_formulas.filter(x=>x.product_id===p.p_product_id).forEach(x=>x.active=false);const ver=1+Math.max(0,...db.production_formulas.filter(x=>x.product_id===p.p_product_id).map(x=>Number(x.version||0)));const f={id:testId(),product_id:p.p_product_id,version:ver,active:true,created_at:now};db.production_formulas.push(f);(p.p_items||[]).forEach(x=>db.production_formula_items.push({id:testId(),formula_id:f.id,...x}));testSaveDB(db);return {data:f,error:null}}
-  if(name==='register_production_with_inventory'){const f=db.production_formulas.find(x=>x.product_id===p.p_product_id&&x.active);if(!f)return {data:null,error:new Error('Produto sem fórmula ativa.')};let total=0;for(const it of db.production_formula_items.filter(x=>x.formula_id===f.id)){const q=Number(p.p_quantity_kg)*Number(it.percentage)/100;let inv=db.ingredient_inventory.find(x=>x.ingredient_id===it.ingredient_id);if(!inv){inv={ingredient_id:it.ingredient_id,quantity_kg:0,avg_unit_cost:0};db.ingredient_inventory.push(inv)}total+=q*Number(inv.avg_unit_cost||0);inv.quantity_kg=Number(inv.quantity_kg||0)-q}const rec={id:p.p_record_id,occurred_at:p.p_occurred_at,product_id:p.p_product_id,quantity_kg:Number(p.p_quantity_kg),notes:p.p_notes,recorded_by:owner,total_cost:total,cost_per_kg:Number(p.p_quantity_kg)?total/Number(p.p_quantity_kg):0,created_at:now};db.production_records.push(rec);testSaveDB(db);return {data:{total_cost:rec.total_cost,cost_per_kg:rec.cost_per_kg},error:null}}
+  if(name==='register_production_with_inventory'){const f=db.production_formulas.find(x=>x.product_id===p.p_product_id&&x.active);if(!f)return {data:null,error:new Error('Produto sem fórmula ativa.')};testRebuildIngredientInventory(db);let total=0;for(const it of db.production_formula_items.filter(x=>x.formula_id===f.id)){const q=Number(p.p_quantity_kg)*Number(it.percentage)/100;const inv=db.ingredient_inventory.find(x=>x.ingredient_id===it.ingredient_id)||{avg_unit_cost:0};total+=q*Number(inv.avg_unit_cost||0)}const rec={id:p.p_record_id,occurred_at:p.p_occurred_at,product_id:p.p_product_id,quantity_kg:Number(p.p_quantity_kg),notes:p.p_notes,recorded_by:owner,total_cost:total,cost_per_kg:Number(p.p_quantity_kg)?total/Number(p.p_quantity_kg):0,created_at:now};if(!db.production_records.some(x=>x.id===rec.id))db.production_records.push(rec);testRebuildIngredientInventory(db);testSaveDB(db);return {data:{total_cost:rec.total_cost,cost_per_kg:rec.cost_per_kg},error:null}}
   if(name==='delete_feeding_record_v2'){const i=db.feeding_records.findIndex(x=>x.id===p.p_record_id);if(i>=0){const [r]=db.feeding_records.splice(i,1);db.feeding_record_deletions.push({...r,deleted_at:now,deleted_by:owner})}testSaveDB(db);return {data:{},error:null}}
   if(name==='correct_feeding_record_v2'){const r=db.feeding_records.find(x=>x.id===p.p_record_id);if(r){db.feeding_record_edits.push({id:testId(),feeding_record_id:r.id,edited_at:now,edited_by:owner,old_lot_id:r.lot_id,new_lot_id:p.p_lot_id,old_product_name:r.product_name,new_product_name:p.p_product_name,old_quantity_kg:r.quantity_kg,new_quantity_kg:p.p_quantity_kg,old_trough_reading:r.trough_reading,new_trough_reading:p.p_trough_reading,old_notes:r.notes,new_notes:p.p_notes});Object.assign(r,{lot_id:p.p_lot_id,product_name:p.p_product_name,quantity_kg:p.p_quantity_kg,trough_reading:p.p_trough_reading,notes:p.p_notes,edited_at:now})}testSaveDB(db);return {data:{},error:null}}
   return {data:{},error:null}}
@@ -1097,7 +1130,8 @@ async function saveProduction(){
         msg('productionMsg','Sem conexão estável. A produção foi salva neste aparelho e será sincronizada automaticamente.');
       }else{
         rememberProductionFingerprint(fp);
-        msg('productionMsg',profile?.role==='field'?'Produção registrada com sucesso. Estoque atualizado automaticamente.':`Produção registrada. Custo estimado: ${moneyBR(prodResult?.total_cost||0)} (${moneyBR(prodResult?.cost_per_kg||0)}/kg).`);
+        msg('productionMsg',profile?.role==='field'?'Produção registrada com sucesso. Estoque atualizado automaticamente.':`Produção registrada. Estoque dos insumos baixado automaticamente. Custo estimado: ${moneyBR(prodResult?.total_cost||0)} (${moneyBR(prodResult?.cost_per_kg||0)}/kg).`);
+        if(profile?.role!=='field')await loadFactoryAdminData();
       }
     }else{
       setProductionPendingQueue([...productionPendingQueue(),{id:payload.id,payload,created_at:new Date().toISOString()}]);
@@ -1767,6 +1801,7 @@ function moneyBR(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency'
 async function loadFactoryAdminData(){
   if(profile?.role==='field'||!navigator.onLine)return;
   try{
+    if(TEST_MODE){const _db=testLoadDB();testRebuildIngredientInventory(_db);testSaveDB(_db);}
     const [a,b,c,d,e,f,g]=await Promise.all([
       sb.from('ingredients').select('*').order('name'),
       sb.from('ingredient_inventory').select('*'),
@@ -1791,7 +1826,15 @@ function renderIngredientAdmin(){
   const invMap=Object.fromEntries(ingredientInventory.map(x=>[x.ingredient_id,x]));
   if($('ingredientsManageList'))$('ingredientsManageList').innerHTML=active.length?active.map(i=>`<div class="item" style="display:flex;align-items:center;justify-content:space-between;gap:10px"><b>${esc(i.name)}</b><button class="btn danger smallbtn" onclick="deactivateIngredient('${i.id}')">Excluir</button></div>`).join(''):'<div class="small">Nenhum insumo cadastrado.</div>';
   const imap=Object.fromEntries(ingredients.map(i=>[i.id,i.name]));
-  $('stockHistory').innerHTML=stockEntries.length?stockEntries.map(r=>`<div style="padding:10px 0;border-bottom:1px solid #e3e9e2"><b>${esc(imap[r.ingredient_id]||'Insumo')}</b> · ${Number(r.quantity_kg).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg <span class="small">· ${farmDateBRFromISO(String(r.occurred_at).slice(0,10))}</span></div>`).join(''):'<div class="small" style="padding:8px 0">Nenhuma entrada registrada.</div>';
+  const latestEntryByIngredient={};
+  stockEntries.forEach(r=>{if(!latestEntryByIngredient[r.ingredient_id])latestEntryByIngredient[r.ingredient_id]=r});
+  const stockSummary=ingredientInventory
+    .filter(inv=>Math.abs(Number(inv.quantity_kg||0))>0.0000001)
+    .sort((a,b)=>String(imap[a.ingredient_id]||'').localeCompare(String(imap[b.ingredient_id]||''),'pt-BR'));
+  $('stockHistory').innerHTML=stockSummary.length?stockSummary.map(inv=>{
+    const last=latestEntryByIngredient[inv.ingredient_id];
+    return `<div style="padding:10px 0;border-bottom:1px solid #e3e9e2"><b>${esc(imap[inv.ingredient_id]||'Insumo')}</b> · ${Number(inv.quantity_kg||0).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg${last?` <span class="small">· ${farmDateBRFromISO(String(last.occurred_at).slice(0,10))}</span>`:''}</div>`;
+  }).join(''):'<div class="small" style="padding:8px 0">Nenhum insumo com saldo em estoque.</div>';
   if($('salesHistory'))$('salesHistory').innerHTML=ingredientSales.length?ingredientSales.map(r=>`<div class="item"><b>${esc(imap[r.ingredient_id]||'Insumo')}</b> · ${Number(r.quantity_kg).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg<div class="small">${farmDateTimeBR(r.occurred_at)} · comprador: ${esc(r.buyer)} · ${moneyBR(r.unit_price)}/kg · venda ${moneyBR(Number(r.quantity_kg)*Number(r.unit_price))}</div><div class="small">Responsável: ${esc(r.recorder?.full_name||'Usuário')}${r.notes?' · '+esc(r.notes):''}</div></div>`).join(''):'<div class="small">Nenhuma venda ou saída registrada.</div>';
 }
 function toggleIngredientRegistration(){
