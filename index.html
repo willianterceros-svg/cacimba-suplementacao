@@ -285,14 +285,17 @@ textarea{min-height:130px}
       <div class="card">
         <h2>Estoque de insumos</h2>
         <div class="small">Cadastre os ingredientes usados na fábrica e registre cada entrada em kg com seu preço por kg. O sistema mantém o saldo e o custo médio ponderado automaticamente. Saídas e produções podem levar o estoque a saldo negativo, que será destacado para conferência.</div>
-        <div class="grid" style="margin-top:12px">
-          <div><label>Novo insumo</label><input id="ingredientName" placeholder="Ex.: Milho"></div>
-          <div style="align-self:end"><button class="btn" style="width:100%" onclick="createIngredient()">Cadastrar insumo</button></div>
+        <div style="margin-top:12px"><button class="btn" style="width:100%" onclick="toggleIngredientRegistration()">Cadastrar novo insumo</button></div>
+        <div id="ingredientRegistration" class="hidden" style="margin-top:12px">
+          <label>Nome do insumo</label><input id="ingredientName" placeholder="Ex.: Milho">
+          <button class="btn" style="width:100%;margin-top:10px" onclick="createIngredient()">Salvar insumo</button>
         </div>
         <div id="ingredientMsg"></div>
+        <div style="margin-top:18px"><b>Insumos cadastrados</b></div>
+        <div id="ingredientsManageList" style="margin-top:8px"></div>
       </div>
       <div class="card">
-        <h2>Lançar entrada</h2>
+        <h2>Registrar entrada</h2>
         <div class="grid">
           <div><label>Data e hora</label><input id="stockOccurred" type="datetime-local"></div>
           <div><label>Insumo</label><select id="stockIngredient"></select></div>
@@ -500,7 +503,7 @@ textarea{min-height:130px}
 </div></div>
 
 <div style="max-width:1100px;margin:18px auto;padding:0 14px"><button class="btn danger" onclick="if(confirm('Apagar todos os dados fictícios deste teste?')){localStorage.removeItem(TEST_DB_KEY);Object.values(OFFLINE_KEYS).forEach(k=>localStorage.removeItem(k));location.reload()}">Zerar dados do ambiente de teste</button></div>
-<div class="footer"><div>Agropecuária Cacimba • Controle de Suplementação</div><div class="footerVersion">Versão TESTE 2.3.0-SANDBOX</div></div>
+<div class="footer"><div>Agropecuária Cacimba • Controle de Suplementação</div><div class="footerVersion">Versão TESTE 2.3.1-SANDBOX</div></div>
 
 <script>
 const TEST_MODE=true;
@@ -1781,15 +1784,27 @@ function renderIngredientAdmin(){
   if(current&&active.some(i=>i.id===current))$('stockIngredient').value=current;
   if($('saleIngredient')){const saleCurrent=$('saleIngredient').value;$('saleIngredient').innerHTML='<option value="">Selecione</option>'+active.map(i=>`<option value="${i.id}">${esc(i.name)}</option>`).join('');if(saleCurrent&&active.some(i=>i.id===saleCurrent))$('saleIngredient').value=saleCurrent;}
   const invMap=Object.fromEntries(ingredientInventory.map(x=>[x.ingredient_id,x]));
+  if($('ingredientsManageList'))$('ingredientsManageList').innerHTML=active.length?active.map(i=>`<div class="item" style="display:flex;align-items:center;justify-content:space-between;gap:10px"><b>${esc(i.name)}</b><button class="btn danger smallbtn" onclick="deactivateIngredient('${i.id}')">Excluir</button></div>`).join(''):'<div class="small">Nenhum insumo cadastrado.</div>';
   $('inventorySummary').innerHTML=active.length?active.map(i=>{const v=invMap[i.id]||{},q=Number(v.quantity_kg||0),neg=q<0;return `<div class="item" ${neg?'style="border-left:4px solid #b42318"':''}><b>${esc(i.name)}</b>${neg?' <span class="pill" style="background:#fee4e2;color:#b42318">SALDO NEGATIVO</span>':''}<div class="small">Saldo: <b ${neg?'style="color:#b42318"':''}>${q.toLocaleString('pt-BR',{maximumFractionDigits:3})} kg</b> · custo médio: <b>${moneyBR(v.average_cost_per_kg||0)}/kg</b> · valor estimado: <b>${moneyBR(q*Number(v.average_cost_per_kg||0))}</b></div></div>`}).join(''):'<div class="small">Nenhum insumo cadastrado.</div>';
   const imap=Object.fromEntries(ingredients.map(i=>[i.id,i.name]));
   $('stockHistory').innerHTML=stockEntries.length?stockEntries.map(r=>`<div class="item"><b>${esc(imap[r.ingredient_id]||'Insumo')}</b> · ${Number(r.quantity_kg).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg<div class="small">${farmDateTimeBR(r.occurred_at)} · ${moneyBR(r.unit_price)}/kg · total ${moneyBR(Number(r.quantity_kg)*Number(r.unit_price))}${r.supplier?' · '+esc(r.supplier):''}</div><div class="small">Responsável: ${esc(r.recorder?.full_name||'Usuário')}</div></div>`).join(''):'<div class="small">Nenhuma entrada registrada.</div>';
   if($('salesHistory'))$('salesHistory').innerHTML=ingredientSales.length?ingredientSales.map(r=>`<div class="item"><b>${esc(imap[r.ingredient_id]||'Insumo')}</b> · ${Number(r.quantity_kg).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg<div class="small">${farmDateTimeBR(r.occurred_at)} · comprador: ${esc(r.buyer)} · ${moneyBR(r.unit_price)}/kg · venda ${moneyBR(Number(r.quantity_kg)*Number(r.unit_price))}</div><div class="small">Responsável: ${esc(r.recorder?.full_name||'Usuário')}${r.notes?' · '+esc(r.notes):''}</div></div>`).join(''):'<div class="small">Nenhuma venda ou saída registrada.</div>';
 }
+function toggleIngredientRegistration(){
+  const el=$('ingredientRegistration');if(!el)return;el.classList.toggle('hidden');if(!el.classList.contains('hidden'))setTimeout(()=>$('ingredientName')?.focus(),50);
+}
+async function deactivateIngredient(id){
+  const ing=ingredients.find(i=>i.id===id);if(!ing)return;
+  const hasHistory=stockEntries.some(x=>x.ingredient_id===id)||ingredientSales.some(x=>x.ingredient_id===id)||formulaItems.some(x=>x.ingredient_id===id)||Number((ingredientInventory.find(x=>x.ingredient_id===id)||{}).quantity_kg||0)!==0;
+  const text=hasHistory?`O insumo “${ing.name}” possui histórico ou saldo. Ele será retirado das novas entradas e fórmulas, mas o histórico será preservado. Continuar?`:`Excluir o insumo “${ing.name}”?`;
+  if(!confirm(text))return;
+  const {error}=await sb.from('ingredients').update({active:false}).eq('id',id);if(error)return msg('ingredientMsg',error.message||'Não foi possível excluir o insumo.',true);
+  msg('ingredientMsg',hasHistory?'Insumo inativado. O histórico foi preservado.':'Insumo excluído da lista de uso.');await loadFactoryAdminData();
+}
 async function createIngredient(){
   msg('ingredientMsg','');const name=$('ingredientName').value.trim();if(!name)return msg('ingredientMsg','Informe o nome do insumo.',true);if(!navigator.onLine)return msg('ingredientMsg','O cadastro de insumos exige conexão com a internet.',true);
   const {error}=await sb.from('ingredients').insert({name,created_by:profile.id});if(error)return msg('ingredientMsg',error.code==='23505'?'Já existe um insumo com esse nome.':error.message,true);
-  $('ingredientName').value='';msg('ingredientMsg','Insumo cadastrado com sucesso.');await loadFactoryAdminData();
+  $('ingredientName').value='';$('ingredientRegistration')?.classList.add('hidden');msg('ingredientMsg','Insumo cadastrado com sucesso.');await loadFactoryAdminData();
 }
 async function addStockEntry(){
   msg('stockMsg','');if(!navigator.onLine)return msg('stockMsg','O lançamento de entrada exige conexão com a internet.',true);
