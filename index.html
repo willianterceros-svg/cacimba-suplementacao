@@ -355,30 +355,30 @@ textarea{min-height:130px}
 
     <section id="formulas" class="hidden admin">
       <div class="card">
-        <h2>Produtos fabricados</h2>
-        <div class="small">São os produtos que podem ser lançados no módulo Produção. Eles são separados dos produtos fornecidos aos lotes.</div>
-        <div class="grid" style="margin-top:12px">
-          <div><label>Novo produto fabricado</label><input id="factoryProductName" placeholder="Ex.: Proteinado 0,3"></div>
-          <div style="align-self:end"><button class="btn" style="width:100%" onclick="createFactoryProduct()">Cadastrar produto</button></div>
-        </div>
+        <h2>Produtos</h2>
+        <div class="small">Cadastre os produtos fabricados e informe a composição de cada fórmula.</div>
+        <button class="btn" style="width:100%;margin-top:12px" onclick="openProductFormulaEditor()">Cadastrar produto</button>
         <div id="factoryProductMsg"></div>
-        <div id="factoryProductsList" style="margin-top:12px"></div>
       </div>
-      <div class="card">
-        <h2>Fórmula</h2>
-        <div class="grid">
-          <div class="full"><label>Produto fabricado</label><select id="formulaProduct" onchange="renderCurrentFormula()"></select></div>
-        </div>
-        <div class="small" style="margin:8px 0">Informe os percentuais em peso. A soma precisa ser exatamente 100%. Ao salvar uma nova fórmula, a anterior fica preservada no histórico e a nova passa a ser a versão ativa.</div>
+
+      <div id="productFormulaEditor" class="card hidden">
+        <h2 id="productFormulaEditorTitle">Cadastrar produto</h2>
+        <input id="editingFactoryProductId" type="hidden">
+        <div><label>Nome do produto</label><input id="factoryProductName" placeholder="Ex.: Creep"></div>
+        <div class="small" style="margin:10px 0 8px">Informe os insumos e o percentual de cada um. A soma deve totalizar 100%.</div>
         <div id="formulaItems"></div>
         <button class="btn alt" style="margin-top:10px" onclick="addFormulaRow()">Adicionar insumo</button>
-        <div class="expectedBox" style="margin-top:10px">Total da fórmula: <b id="formulaTotal">0%</b></div>
-        <button id="saveFormulaBtn" class="btn" style="width:100%;margin-top:12px" onclick="saveFormula()">Salvar nova versão da fórmula</button>
+        <div class="expectedBox" style="margin-top:10px">Total: <b id="formulaTotal">0%</b></div>
+        <div class="grid" style="margin-top:12px">
+          <button id="saveFormulaBtn" class="btn" style="width:100%" onclick="saveProductFormula()">Salvar</button>
+          <button class="btn alt" style="width:100%" onclick="closeProductFormulaEditor()">Cancelar</button>
+        </div>
         <div id="formulaMsg"></div>
       </div>
+
       <div class="card">
-        <h2>Fórmula ativa</h2>
-        <div id="currentFormula"></div>
+        <h2>Produtos cadastrados</h2>
+        <div id="factoryProductsList"></div>
       </div>
     </section>
 
@@ -1852,31 +1852,104 @@ async function registerIngredientSale(){
   try{const {data,error}=await sb.rpc('register_ingredient_sale',{p_sale_id:uuid(),p_ingredient_id:ingredient,p_occurred_at:farmLocalToDate($('saleOccurred').value||farmNowLocal()).toISOString(),p_quantity_kg:qty,p_unit_price:price,p_buyer:buyer,p_notes:$('saleNotes').value.trim()||null});if(error)throw error;$('saleQty').value=$('salePrice').value=$('saleBuyer').value=$('saleNotes').value='';$('saleOccurred').value=farmNowLocal();const saldo=Number(data?.quantity_kg||0);msg('saleMsg',saldo<0?`Saída registrada. Atenção: o saldo ficou negativo em ${Math.abs(saldo).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg.`:'Venda/saída registrada com sucesso.',saldo<0);await loadFactoryAdminData()}catch(e){msg('saleMsg',e.message||'Não foi possível registrar a venda/saída.',true)}finally{btn.disabled=false}
 }
 function renderFactoryProducts(){
-  if(!$('factoryProductMsg'))return;const active=productionProducts.filter(p=>p.active);
-  $('factoryProductsList').innerHTML=active.length?active.map(p=>{const f=productionFormulas.find(x=>x.product_id===p.id&&x.active);return `<div class="item"><b>${esc(p.name)}</b> ${f?`<span class="pill">FÓRMULA v${f.version}</span>`:'<span class="pill warnTag">SEM FÓRMULA</span>'}</div>`}).join(''):'<div class="small">Nenhum produto fabricado cadastrado.</div>';
-}
-async function createFactoryProduct(){
-  msg('factoryProductMsg','');const name=$('factoryProductName').value.trim();if(!name)return msg('factoryProductMsg','Informe o nome do produto.',true);if(!navigator.onLine)return msg('factoryProductMsg','Este cadastro exige internet.',true);
-  const {error}=await sb.from('production_products').insert({name,created_by:profile.id});if(error)return msg('factoryProductMsg',error.code==='23505'?'Já existe um produto com esse nome.':error.message,true);$('factoryProductName').value='';msg('factoryProductMsg','Produto fabricado cadastrado. Agora crie a fórmula.');await loadFactoryAdminData();
+  if(!$('factoryProductsList'))return;
+  const active=productionProducts.filter(p=>p.active);
+  const imap=Object.fromEntries(ingredients.map(i=>[i.id,i.name]));
+  $('factoryProductsList').innerHTML=active.length?active.map(p=>{
+    const f=productionFormulas.find(x=>x.product_id===p.id&&x.active);
+    const rows=f?formulaItems.filter(x=>x.formula_id===f.id):[];
+    return `<div class="item" style="margin-bottom:10px">
+      <b>${esc(p.name)}</b>
+      ${rows.length?`<div style="margin-top:6px">${rows.map(x=>`<div class="small">${esc(imap[x.ingredient_id]||'Insumo')} — <b>${Number(x.percentage).toLocaleString('pt-BR',{maximumFractionDigits:4})}%</b></div>`).join('')}</div>`:'<div class="small" style="margin-top:6px">Fórmula ainda não cadastrada.</div>'}
+      <div class="actions" style="margin-top:10px">
+        <button class="btn alt smallbtn" onclick="editFactoryProduct('${p.id}')">Editar</button>
+        <button class="btn danger smallbtn" onclick="deleteFactoryProduct('${p.id}')">Excluir</button>
+      </div>
+    </div>`;
+  }).join(''):'<div class="small">Nenhum produto cadastrado.</div>';
 }
 function renderFormulaEditor(){
-  if(!$('formulaProduct'))return;const active=productionProducts.filter(p=>p.active),cur=$('formulaProduct').value;
-  $('formulaProduct').innerHTML='<option value="">Selecione</option>'+active.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');if(cur&&active.some(p=>p.id===cur))$('formulaProduct').value=cur;
-  if(!$('formulaItems').children.length)addFormulaRow();renderCurrentFormula();
+  if(!$('formulaItems'))return;
+  if(!$('productFormulaEditor').classList.contains('hidden')&&!$('formulaItems').children.length)addFormulaRow();
+}
+function openProductFormulaEditor(){
+  $('editingFactoryProductId').value='';
+  $('productFormulaEditorTitle').textContent='Cadastrar produto';
+  $('factoryProductName').value='';
+  $('formulaItems').innerHTML='';
+  addFormulaRow();
+  $('productFormulaEditor').classList.remove('hidden');
+  msg('formulaMsg','');
+  $('factoryProductName').focus();
+}
+function closeProductFormulaEditor(){
+  $('productFormulaEditor').classList.add('hidden');
+  $('editingFactoryProductId').value='';
+  $('factoryProductName').value='';
+  $('formulaItems').innerHTML='';
+  updateFormulaTotal();
+  msg('formulaMsg','');
 }
 function addFormulaRow(ingredientId='',percentage=''){
-  if(!$('formulaItems'))return;const d=document.createElement('div');d.className='groupBox formulaRow';d.innerHTML=`<div class="grid"><div><label>Insumo</label><select class="formulaIngredient"><option value="">Selecione</option>${ingredients.filter(i=>i.active).map(i=>`<option value="${i.id}" ${i.id===ingredientId?'selected':''}>${esc(i.name)}</option>`).join('')}</select></div><div><label>Percentual (%)</label><input class="formulaPct" type="number" min="0.0001" max="100" step="0.0001" inputmode="decimal" value="${esc(percentage)}" oninput="updateFormulaTotal()"></div></div><button class="btn danger smallbtn" style="margin-top:8px" onclick="this.closest('.formulaRow').remove();updateFormulaTotal()">Remover</button>`;$('formulaItems').appendChild(d);updateFormulaTotal();
+  if(!$('formulaItems'))return;
+  const d=document.createElement('div');d.className='groupBox formulaRow';
+  d.innerHTML=`<div class="grid"><div><label>Insumo</label><select class="formulaIngredient"><option value="">Selecione</option>${ingredients.filter(i=>i.active||i.id===ingredientId).map(i=>`<option value="${i.id}" ${i.id===ingredientId?'selected':''}>${esc(i.name)}</option>`).join('')}</select></div><div><label>%</label><input class="formulaPct" type="number" min="0.0001" max="100" step="0.0001" inputmode="decimal" value="${esc(percentage)}" oninput="updateFormulaTotal()"></div></div><button class="btn danger smallbtn" style="margin-top:8px" onclick="this.closest('.formulaRow').remove();updateFormulaTotal()">Remover</button>`;
+  $('formulaItems').appendChild(d);updateFormulaTotal();
 }
-function updateFormulaTotal(){const total=[...document.querySelectorAll('.formulaPct')].reduce((a,x)=>a+(Number(x.value)||0),0);if($('formulaTotal'))$('formulaTotal').textContent=total.toLocaleString('pt-BR',{maximumFractionDigits:4})+'%'}
-async function saveFormula(){
-  msg('formulaMsg','');if(!navigator.onLine)return msg('formulaMsg','O cadastro de fórmulas exige internet.',true);const product=$('formulaProduct').value;if(!product)return msg('formulaMsg','Selecione o produto fabricado.',true);
-  const items=[...document.querySelectorAll('.formulaRow')].map(r=>({ingredient_id:r.querySelector('.formulaIngredient').value,percentage:Number(r.querySelector('.formulaPct').value)}));if(items.some(x=>!x.ingredient_id||!Number.isFinite(x.percentage)||x.percentage<=0))return msg('formulaMsg','Preencha todos os insumos e percentuais.',true);
-  const total=items.reduce((a,x)=>a+x.percentage,0);if(Math.abs(total-100)>0.0001)return msg('formulaMsg',`A fórmula precisa totalizar 100%. Total atual: ${total.toLocaleString('pt-BR')}%.`,true);
-  const btn=$('saveFormulaBtn');btn.disabled=true;try{const {error}=await sb.rpc('save_production_formula',{p_product_id:product,p_items:items});if(error)throw error;msg('formulaMsg','Nova versão da fórmula salva e ativada.');$('formulaItems').innerHTML='';addFormulaRow();await loadFactoryAdminData()}catch(e){msg('formulaMsg',e.message||'Não foi possível salvar a fórmula.',true)}finally{btn.disabled=false}
+function updateFormulaTotal(){
+  const total=[...document.querySelectorAll('#formulaItems .formulaPct')].reduce((a,x)=>a+(Number(String(x.value).replace(',','.'))||0),0);
+  if($('formulaTotal'))$('formulaTotal').textContent=total.toLocaleString('pt-BR',{maximumFractionDigits:4})+'%';
 }
-function renderCurrentFormula(){
-  if(!$('currentFormula'))return;const pid=$('formulaProduct')?.value;if(!pid){$('currentFormula').innerHTML='<div class="small">Selecione um produto para visualizar a fórmula ativa.</div>';return}const f=productionFormulas.find(x=>x.product_id===pid&&x.active);if(!f){$('currentFormula').innerHTML='<div class="small">Este produto ainda não possui fórmula.</div>';return}const imap=Object.fromEntries(ingredients.map(i=>[i.id,i.name]));const rows=formulaItems.filter(x=>x.formula_id===f.id).sort((a,b)=>(imap[a.ingredient_id]||'').localeCompare(imap[b.ingredient_id]||''));$('currentFormula').innerHTML=`<div class="item"><b>Versão ${f.version}</b><div class="small">Ativa desde ${farmDateTimeBR(f.created_at)}</div>${rows.map(x=>`<div class="small">${esc(imap[x.ingredient_id]||'Insumo')}: <b>${Number(x.percentage).toLocaleString('pt-BR',{maximumFractionDigits:4})}%</b></div>`).join('')}</div>`;
+function editFactoryProduct(id){
+  const p=productionProducts.find(x=>x.id===id);if(!p)return;
+  $('editingFactoryProductId').value=id;
+  $('productFormulaEditorTitle').textContent='Editar produto';
+  $('factoryProductName').value=p.name||'';
+  $('formulaItems').innerHTML='';
+  const f=productionFormulas.find(x=>x.product_id===id&&x.active);
+  const rows=f?formulaItems.filter(x=>x.formula_id===f.id):[];
+  if(rows.length)rows.forEach(x=>addFormulaRow(x.ingredient_id,x.percentage));else addFormulaRow();
+  $('productFormulaEditor').classList.remove('hidden');
+  msg('formulaMsg','');
+  $('productFormulaEditor').scrollIntoView({behavior:'smooth',block:'start'});
 }
+async function saveProductFormula(){
+  msg('formulaMsg','');msg('factoryProductMsg','');
+  if(!navigator.onLine)return msg('formulaMsg','O cadastro exige conexão com a internet.',true);
+  const name=$('factoryProductName').value.trim();if(!name)return msg('formulaMsg','Informe o nome do produto.',true);
+  const items=[...document.querySelectorAll('#formulaItems .formulaRow')].map(r=>({ingredient_id:r.querySelector('.formulaIngredient').value,percentage:Number(String(r.querySelector('.formulaPct').value).replace(',','.'))}));
+  if(!items.length||items.some(x=>!x.ingredient_id||!Number.isFinite(x.percentage)||x.percentage<=0))return msg('formulaMsg','Preencha todos os insumos e percentuais.',true);
+  if(new Set(items.map(x=>x.ingredient_id)).size!==items.length)return msg('formulaMsg','O mesmo insumo não pode aparecer duas vezes na fórmula.',true);
+  const total=items.reduce((a,x)=>a+x.percentage,0);if(Math.abs(total-100)>0.0001)return msg('formulaMsg',`A fórmula precisa totalizar 100%. Total atual: ${total.toLocaleString('pt-BR',{maximumFractionDigits:4})}%.`,true);
+  const existingId=$('editingFactoryProductId').value;
+  const duplicate=productionProducts.find(p=>p.active&&p.name.trim().toLocaleLowerCase('pt-BR')===name.toLocaleLowerCase('pt-BR')&&p.id!==existingId);
+  if(duplicate)return msg('formulaMsg','Já existe um produto com esse nome.',true);
+  const btn=$('saveFormulaBtn');btn.disabled=true;
+  try{
+    let productId=existingId;
+    if(productId){
+      const {error}=await sb.from('production_products').update({name}).eq('id',productId);if(error)throw error;
+    }else{
+      const {data,error}=await sb.from('production_products').insert({name,created_by:profile.id}).select().single();if(error)throw error;productId=data.id;
+    }
+    const {error}=await sb.rpc('save_production_formula',{p_product_id:productId,p_items:items});if(error)throw error;
+    closeProductFormulaEditor();
+    msg('factoryProductMsg',existingId?'Produto atualizado com sucesso.':'Produto cadastrado com sucesso.');
+    await loadFactoryAdminData();
+  }catch(e){msg('formulaMsg',e.code==='23505'?'Já existe um produto com esse nome.':(e.message||'Não foi possível salvar o produto.'),true)}finally{btn.disabled=false}
+}
+async function deleteFactoryProduct(id){
+  const p=productionProducts.find(x=>x.id===id);if(!p)return;
+  if(!confirm(`Excluir o produto “${p.name}”?`))return;
+  if(!navigator.onLine)return msg('factoryProductMsg','A exclusão exige conexão com a internet.',true);
+  try{
+    const {error}=await sb.from('production_products').update({active:false}).eq('id',id);if(error)throw error;
+    const {error:formulaError}=await sb.from('production_formulas').update({active:false}).eq('product_id',id).eq('active',true);if(formulaError)throw formulaError;
+    if($('editingFactoryProductId').value===id)closeProductFormulaEditor();
+    msg('factoryProductMsg','Produto excluído.');await loadFactoryAdminData();
+  }catch(e){msg('factoryProductMsg',e.message||'Não foi possível excluir o produto.',true)}
+}
+
 
 
 if(TEST_MODE){
