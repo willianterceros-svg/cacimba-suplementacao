@@ -309,14 +309,7 @@ textarea{min-height:130px}
         </div>
         <div id="stockMsg"></div>
       </div>
-      <div class="card">
-        <h2>Posição atual</h2>
-        <div id="inventorySummary"></div>
-      </div>
-      <div class="card">
-        <h2>Entradas recentes</h2>
-        <div id="stockHistory"></div>
-      </div>
+      <div id="stockHistory" style="margin:14px 2px 0"></div>
       </div>
       <div id="ingredientsManagerView" class="hidden">
         <div class="card">
@@ -1797,10 +1790,8 @@ function renderIngredientAdmin(){
   if($('saleIngredient')){const saleCurrent=$('saleIngredient').value;$('saleIngredient').innerHTML='<option value="">Selecione</option>'+active.map(i=>`<option value="${i.id}">${esc(i.name)}</option>`).join('');if(saleCurrent&&active.some(i=>i.id===saleCurrent))$('saleIngredient').value=saleCurrent;}
   const invMap=Object.fromEntries(ingredientInventory.map(x=>[x.ingredient_id,x]));
   if($('ingredientsManageList'))$('ingredientsManageList').innerHTML=active.length?active.map(i=>`<div class="item" style="display:flex;align-items:center;justify-content:space-between;gap:10px"><b>${esc(i.name)}</b><button class="btn danger smallbtn" onclick="deactivateIngredient('${i.id}')">Excluir</button></div>`).join(''):'<div class="small">Nenhum insumo cadastrado.</div>';
-  const withInventory=active.filter(i=>Object.prototype.hasOwnProperty.call(invMap,i.id));
-  $('inventorySummary').innerHTML=withInventory.length?withInventory.map(i=>{const v=invMap[i.id]||{},q=Number(v.quantity_kg||0),neg=q<0;return `<div class="item" ${neg?'style="border-left:4px solid #b42318"':''}><b>${esc(i.name)}</b>${neg?' <span class="pill" style="background:#fee4e2;color:#b42318">SALDO NEGATIVO</span>':''}<div class="small">Saldo: <b ${neg?'style="color:#b42318"':''}>${q.toLocaleString('pt-BR',{maximumFractionDigits:3})} kg</b> · custo médio: <b>${moneyBR(v.average_cost_per_kg||0)}/kg</b> · valor estimado: <b>${moneyBR(q*Number(v.average_cost_per_kg||0))}</b></div></div>`}).join(''):'<div class="small">Nenhuma entrada ou movimentação de estoque registrada.</div>';
   const imap=Object.fromEntries(ingredients.map(i=>[i.id,i.name]));
-  $('stockHistory').innerHTML=stockEntries.length?stockEntries.map(r=>`<div class="item"><b>${esc(imap[r.ingredient_id]||'Insumo')}</b> · ${Number(r.quantity_kg).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg<div class="small">${farmDateTimeBR(r.occurred_at)} · ${moneyBR(r.unit_price)}/kg · total ${moneyBR(Number(r.quantity_kg)*Number(r.unit_price))}${r.supplier?' · '+esc(r.supplier):''}</div><div class="small">Responsável: ${esc(r.recorder?.full_name||'Usuário')}</div></div>`).join(''):'<div class="small">Nenhuma entrada registrada.</div>';
+  $('stockHistory').innerHTML=stockEntries.length?stockEntries.map(r=>`<div style="padding:10px 0;border-bottom:1px solid #e3e9e2"><b>${esc(imap[r.ingredient_id]||'Insumo')}</b> · ${Number(r.quantity_kg).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg <span class="small">· ${farmDateBRFromISO(String(r.occurred_at).slice(0,10))}</span></div>`).join(''):'<div class="small" style="padding:8px 0">Nenhuma entrada registrada.</div>';
   if($('salesHistory'))$('salesHistory').innerHTML=ingredientSales.length?ingredientSales.map(r=>`<div class="item"><b>${esc(imap[r.ingredient_id]||'Insumo')}</b> · ${Number(r.quantity_kg).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg<div class="small">${farmDateTimeBR(r.occurred_at)} · comprador: ${esc(r.buyer)} · ${moneyBR(r.unit_price)}/kg · venda ${moneyBR(Number(r.quantity_kg)*Number(r.unit_price))}</div><div class="small">Responsável: ${esc(r.recorder?.full_name||'Usuário')}${r.notes?' · '+esc(r.notes):''}</div></div>`).join(''):'<div class="small">Nenhuma venda ou saída registrada.</div>';
 }
 function toggleIngredientRegistration(){
