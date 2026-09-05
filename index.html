@@ -508,7 +508,7 @@ textarea{min-height:130px}
 </div></div>
 
 <div style="max-width:1100px;margin:18px auto;padding:0 14px"><button class="btn danger" onclick="if(confirm('Apagar todos os dados fictícios deste teste?')){localStorage.removeItem(TEST_DB_KEY);Object.values(OFFLINE_KEYS).forEach(k=>localStorage.removeItem(k));location.reload()}">Zerar dados do ambiente de teste</button></div>
-<div class="footer"><div>Agropecuária Cacimba • Controle de Suplementação</div><div class="footerVersion">Versão TESTE 2.3.2-SANDBOX</div></div>
+<div class="footer"><div>Agropecuária Cacimba • Controle de Suplementação</div><div class="footerVersion">Versão TESTE 2.3.3-SANDBOX</div></div>
 
 <script>
 const TEST_MODE=true;
@@ -1826,14 +1826,25 @@ function renderIngredientAdmin(){
   const invMap=Object.fromEntries(ingredientInventory.map(x=>[x.ingredient_id,x]));
   if($('ingredientsManageList'))$('ingredientsManageList').innerHTML=active.length?active.map(i=>`<div class="item" style="display:flex;align-items:center;justify-content:space-between;gap:10px"><b>${esc(i.name)}</b><button class="btn danger smallbtn" onclick="deactivateIngredient('${i.id}')">Excluir</button></div>`).join(''):'<div class="small">Nenhum insumo cadastrado.</div>';
   const imap=Object.fromEntries(ingredients.map(i=>[i.id,i.name]));
+  // Consolida o estoque pelo nome normalizado do insumo. Isto também corrige
+  // cadastros duplicados antigos (ex.: dois IDs diferentes chamados "Milho").
   const latestEntryByIngredient={};
   stockEntries.forEach(r=>{if(!latestEntryByIngredient[r.ingredient_id])latestEntryByIngredient[r.ingredient_id]=r});
-  const stockSummary=ingredientInventory
-    .filter(inv=>Math.abs(Number(inv.quantity_kg||0))>0.0000001)
-    .sort((a,b)=>String(imap[a.ingredient_id]||'').localeCompare(String(imap[b.ingredient_id]||''),'pt-BR'));
+  const groupedStock={};
+  ingredientInventory.forEach(inv=>{
+    const rawName=imap[inv.ingredient_id]||'Insumo';
+    const key=normalizedIngredientName(rawName);
+    if(!groupedStock[key])groupedStock[key]={name:rawName,quantity_kg:0,last:null};
+    groupedStock[key].quantity_kg+=Number(inv.quantity_kg||0);
+    const e=latestEntryByIngredient[inv.ingredient_id];
+    if(e&&(!groupedStock[key].last||String(e.occurred_at||'')>String(groupedStock[key].last.occurred_at||'')))groupedStock[key].last=e;
+  });
+  const stockSummary=Object.values(groupedStock)
+    .filter(x=>Math.abs(Number(x.quantity_kg||0))>0.0000001)
+    .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'pt-BR'));
   $('stockHistory').innerHTML=stockSummary.length?stockSummary.map(inv=>{
-    const last=latestEntryByIngredient[inv.ingredient_id];
-    return `<div style="padding:10px 0;border-bottom:1px solid #e3e9e2"><b>${esc(imap[inv.ingredient_id]||'Insumo')}</b> · ${Number(inv.quantity_kg||0).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg${last?` <span class="small">· ${farmDateBRFromISO(String(last.occurred_at).slice(0,10))}</span>`:''}</div>`;
+    const last=inv.last;
+    return `<div style="padding:10px 0;border-bottom:1px solid #e3e9e2"><b>${esc(inv.name||'Insumo')}</b> · ${Number(inv.quantity_kg||0).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg${last?` <span class="small">· ${farmDateBRFromISO(String(last.occurred_at).slice(0,10))}</span>`:''}</div>`;
   }).join(''):'<div class="small" style="padding:8px 0">Nenhum insumo com saldo em estoque.</div>';
   if($('salesHistory'))$('salesHistory').innerHTML=ingredientSales.length?ingredientSales.map(r=>`<div class="item"><b>${esc(imap[r.ingredient_id]||'Insumo')}</b> · ${Number(r.quantity_kg).toLocaleString('pt-BR',{maximumFractionDigits:3})} kg<div class="small">${farmDateTimeBR(r.occurred_at)} · comprador: ${esc(r.buyer)} · ${moneyBR(r.unit_price)}/kg · venda ${moneyBR(Number(r.quantity_kg)*Number(r.unit_price))}</div><div class="small">Responsável: ${esc(r.recorder?.full_name||'Usuário')}${r.notes?' · '+esc(r.notes):''}</div></div>`).join(''):'<div class="small">Nenhuma venda ou saída registrada.</div>';
 }
